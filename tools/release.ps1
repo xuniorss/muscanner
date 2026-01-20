@@ -25,8 +25,10 @@ if (!(Test-Path $gui)) { throw "Nao achei: $gui" }
 
 $content = Get-Content $gui -Raw -Encoding UTF8
 $updated = [regex]::Replace($content, 'APP_VERSION\s*=\s*["''][^"''\r\n]+["'']', "APP_VERSION = `"$ReleaseVersion`"")
-if ($updated -eq $content) {
+if ($content -notmatch 'APP_VERSION\s*=\s*["''][^"''\r\n]+["'']') {
   Write-Host "Aviso: nao encontrei APP_VERSION para substituir (verifique gui_scanner_pro.py)."
+} elseif ($updated -eq $content) {
+  Write-Host "APP_VERSION ja esta em $ReleaseVersion (nada para alterar)."
 } else {
   Set-Content -Path $gui -Value $updated -Encoding UTF8
   Write-Host "APP_VERSION atualizado para $ReleaseVersion"
