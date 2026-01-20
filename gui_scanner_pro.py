@@ -40,7 +40,8 @@ import updater_github as upd
 
 APP_TITLE = "Scanner GUI"
 # Atualize este numero quando publicar uma nova versao no GitHub Releases.
-APP_VERSION = "0.1.1"
+# (Layout premium claro)
+APP_VERSION = "0.1.2"
 
 # --- Auto-update (GitHub Releases) ---
 # Recomenda-se repo PUBLICO (ou entao voce precisara de token e isso nao e seguro embutir no exe).
@@ -90,8 +91,8 @@ def safe_set_state(widget: Any, state: str) -> None:
 class ScannerGUI(tb.Window):
     def __init__(self):
         super().__init__(themename=THEME)
-        self.title(APP_TITLE)
-        self.geometry("1100x700")
+        self.title(f"{APP_TITLE} v{APP_VERSION}")
+        self.geometry("1150x700")
         self.minsize(980, 620)
 
         # Fonte e ajustes de estilo (visual mais "premium")
@@ -101,6 +102,9 @@ class ScannerGUI(tb.Window):
             self.option_add("*Font", "{Segoe UI} 10")
         except Exception:
             pass
+
+        # Paleta clara "premium" (nao e dark, mas evita branco estourado)
+        self._apply_premium_light_theme()
         try:
             self.style.configure("Treeview", rowheight=28, font=("Segoe UI", 10))
             self.style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
@@ -111,6 +115,10 @@ class ScannerGUI(tb.Window):
         self._scan_thread: Optional[threading.Thread] = None
         self._stop_flag = False
         self._is_scanning = False
+
+        # Animacao (spinner simples)
+        self._anim_job: Optional[str] = None
+        self._anim_i: int = 0
 
         # Progresso / ETA
         self._scan_start_wall: Optional[float] = None
@@ -134,33 +142,160 @@ class ScannerGUI(tb.Window):
 
         self._build_ui()
 
+    def _apply_premium_light_theme(self) -> None:
+        """Tema claro com visual mais "premium".
+
+        - Evita branco estourado (fundo levemente cinza)
+        - Usa "cards" brancos para contraste
+        - Ajusta tipografia e espacamentos
+        """
+
+        pal = {
+            "bg": "#F3F5F8",          # fundo geral (nao e branco puro)
+            "card": "#FFFFFF",        # superfícies / cards
+            "border": "#E3E8EF",      # bordas suaves
+            "text": "#0F172A",        # texto principal
+            "muted": "#64748B",       # texto secundario
+            "select": "#DBEAFE",      # selecao (azul suave)
+        }
+        self._pal = pal
+
+        # Janela e base
+        try:
+            self.configure(background=pal["bg"])
+        except Exception:
+            pass
+
+        try:
+            # Containers
+            self.style.configure("App.TFrame", background=pal["bg"])
+            self.style.configure("Card.TFrame", background=pal["card"], borderwidth=1, relief="solid")
+
+            # Separators mais discretos
+            self.style.configure("TSeparator", background=pal["border"])
+
+            # Labels
+            self.style.configure("TLabel", background=pal["bg"], foreground=pal["text"], font=("Segoe UI", 10))
+            self.style.configure("Muted.TLabel", background=pal["bg"], foreground=pal["muted"], font=("Segoe UI", 10))
+            self.style.configure("Card.TLabel", background=pal["card"], foreground=pal["text"], font=("Segoe UI", 10))
+            self.style.configure("CardMuted.TLabel", background=pal["card"], foreground=pal["muted"], font=("Segoe UI", 10))
+            self.style.configure("Title.TLabel", background=pal["bg"], foreground=pal["text"], font=("Segoe UI", 20, "bold"))
+            self.style.configure("Subtitle.TLabel", background=pal["bg"], foreground=pal["muted"], font=("Segoe UI", 10))
+
+            # Labelframes como "cards"
+            self.style.configure(
+                "Card.TLabelframe",
+                background=pal["card"],
+                borderwidth=1,
+                relief="solid",
+                bordercolor=pal["border"],
+                lightcolor=pal["border"],
+                darkcolor=pal["border"],
+            )
+            self.style.configure(
+                "Card.TLabelframe.Label",
+                background=pal["bg"],
+                foreground=pal["text"],
+                font=("Segoe UI", 11, "bold"),
+            )
+
+            # Inputs (mais "chunky" e confortavel)
+            self.style.configure("TEntry", padding=(10, 8))
+            self.style.configure("TCombobox", padding=(10, 7))
+            self.style.configure("TSpinbox", padding=(8, 7))
+
+            # Checks dentro de cards
+            self.style.configure("TCheckbutton", background=pal["card"], foreground=pal["text"])
+
+            # Notebook (tabs maiores)
+            self.style.configure("TNotebook", background=pal["bg"], borderwidth=0)
+            self.style.configure("TNotebook.Tab", padding=(18, 10), font=("Segoe UI", 10, "bold"))
+            self.style.map(
+                "TNotebook.Tab",
+                background=[("selected", pal["card"]), ("!selected", pal["bg"])],
+                foreground=[("selected", pal["text"]), ("!selected", pal["muted"])],
+            )
+
+            # Treeview (tabela) em card
+            self.style.configure(
+                "Treeview",
+                background=pal["card"],
+                fieldbackground=pal["card"],
+                foreground=pal["text"],
+                bordercolor=pal["border"],
+                lightcolor=pal["border"],
+                darkcolor=pal["border"],
+                rowheight=30,
+            )
+            self.style.map(
+                "Treeview",
+                background=[("selected", pal["select"])],
+                foreground=[("selected", pal["text"])],
+            )
+
+            # Botoes (um pouco mais altos)
+            self.style.configure("TButton", padding=(14, 10), font=("Segoe UI", 10, "bold"))
+            self.style.configure("PrimaryBig.TButton", padding=(18, 12), font=("Segoe UI", 11, "bold"))
+
+            # Status bar
+            self.style.configure("Status.TFrame", background=pal["card"], borderwidth=1, relief="solid")
+            self.style.configure("Status.TLabel", background=pal["card"], foreground=pal["muted"], font=("Segoe UI", 10))
+
+        except Exception:
+            # Se algo nao suportar no tema/OS, nao queremos derrubar o app
+            pass
+
+    def _start_activity_animation(self) -> None:
+        """Animacao simples (spinner) durante o scan."""
+        self._stop_activity_animation()
+        frames = ["|", "/", "-", "\\"]
+
+        def tick() -> None:
+            if not self._is_scanning:
+                return
+            self._anim_i = (self._anim_i + 1) % len(frames)
+            self.badge_var.set(f"{frames[self._anim_i]} Escaneando")
+            self._anim_job = self.after(140, tick)
+
+        self._anim_job = self.after(140, tick)
+
+    def _stop_activity_animation(self) -> None:
+        if self._anim_job is not None:
+            try:
+                self.after_cancel(self._anim_job)
+            except Exception:
+                pass
+            self._anim_job = None
+
     # ---------------- UI ----------------
     def _build_ui(self) -> None:
-        root = tb.Frame(self, padding=(18, 16))
+        root = tb.Frame(self, padding=(18, 16), style="App.TFrame")
         root.pack(fill=BOTH, expand=YES)
 
         # ---- Header "premium" ----
-        header = tb.Frame(root)
+        header = tb.Frame(root, style="App.TFrame")
         header.pack(fill=X, pady=(0, 12))
 
-        left = tb.Frame(header)
+        left = tb.Frame(header, style="App.TFrame")
         left.pack(side=LEFT, fill=X, expand=YES)
 
+        title_row = tb.Frame(left, style="App.TFrame")
+        title_row.pack(anchor=W)
+        tb.Label(title_row, text=APP_TITLE, style="Title.TLabel").pack(side=LEFT, anchor=W)
         tb.Label(
-            left,
-            text=APP_TITLE,
-            font=("Segoe UI", 20, "bold"),
-            bootstyle="primary",
-        ).pack(anchor=W)
+            title_row,
+            text=f"v{APP_VERSION}",
+            bootstyle="primary-inverse",
+            padding=(10, 4),
+        ).pack(side=LEFT, padx=(10, 0), pady=(6, 0))
 
         tb.Label(
             left,
             text="Busca por nomes e conteudo • multi-termos (AND)",
-            font=("Segoe UI", 10),
-            bootstyle="secondary",
-        ).pack(anchor=W, pady=(2, 0))
+            style="Subtitle.TLabel",
+        ).pack(anchor=W, pady=(4, 0))
 
-        right = tb.Frame(header)
+        right = tb.Frame(header, style="App.TFrame")
         right.pack(side=RIGHT)
 
         # Botao de atualizacao (baixa do GitHub Releases)
@@ -175,20 +310,21 @@ class ScannerGUI(tb.Window):
         self.btn_update.pack(anchor=E)
 
         self.badge_var = tk.StringVar(value="Pronto")
-        tb.Label(
+        self.lbl_badge = tb.Label(
             right,
             textvariable=self.badge_var,
-            font=("Segoe UI", 10, "bold"),
-            bootstyle="secondary",
-        ).pack(anchor=E, pady=(6, 0))
+            bootstyle="secondary-inverse",
+            padding=(10, 4),
+        )
+        self.lbl_badge.pack(anchor=E, pady=(8, 0))
 
         tb.Separator(root).pack(fill=X, pady=(0, 12))
 
         self.notebook = tb.Notebook(root)
         self.notebook.pack(fill=BOTH, expand=YES)
 
-        self.tab_search = tb.Frame(self.notebook, padding=12)
-        self.tab_results = tb.Frame(self.notebook, padding=12)
+        self.tab_search = tb.Frame(self.notebook, padding=12, style="App.TFrame")
+        self.tab_results = tb.Frame(self.notebook, padding=12, style="App.TFrame")
         self.notebook.add(self.tab_search, text="Busca")
         self.notebook.add(self.tab_results, text="Resultados")
 
@@ -197,16 +333,16 @@ class ScannerGUI(tb.Window):
 
         # ---- Status bar (progresso + ETA) ----
         tb.Separator(root).pack(fill=X, pady=(12, 0))
-        status = tb.Frame(root, padding=(8, 6))
+        status = tb.Frame(root, padding=(10, 8), style="Status.TFrame")
         status.pack(fill=X)
 
         self.status_msg_var = tk.StringVar(value="Pronto.")
         self.status_stats_var = tk.StringVar(value="")
 
-        tb.Label(status, textvariable=self.status_msg_var, bootstyle="secondary").pack(side=LEFT)
-        self.progress = tb.Progressbar(status, mode="determinate")
+        tb.Label(status, textvariable=self.status_msg_var, style="Status.TLabel").pack(side=LEFT)
+        self.progress = tb.Progressbar(status, mode="determinate", bootstyle="striped")
         self.progress.pack(side=LEFT, fill=X, expand=YES, padx=12)
-        tb.Label(status, textvariable=self.status_stats_var, bootstyle="secondary").pack(side=RIGHT)
+        tb.Label(status, textvariable=self.status_stats_var, style="Status.TLabel").pack(side=RIGHT)
 
     def _reg(self, w: Any) -> Any:
         self._form_widgets.append(w)
@@ -214,12 +350,12 @@ class ScannerGUI(tb.Window):
 
     def _build_search_tab(self) -> None:
         # ---------- Entrada ----------
-        lf_in = tb.Labelframe(self.tab_search, text="Entrada", padding=12, bootstyle="primary")
+        lf_in = tb.Labelframe(self.tab_search, text="Entrada", padding=12, style="Card.TLabelframe")
         lf_in.pack(fill=X)
         lf_in.columnconfigure(1, weight=1)
 
         self.path_var = tk.StringVar()
-        tb.Label(lf_in, text="Caminho (arquivo ou pasta):").grid(row=0, column=0, sticky=W)
+        tb.Label(lf_in, text="Caminho (arquivo ou pasta):", style="Card.TLabel").grid(row=0, column=0, sticky=W)
         self.ent_path = self._reg(tb.Entry(lf_in, textvariable=self.path_var))
         self.ent_path.grid(row=0, column=1, sticky=EW, padx=8)
         self.btn_pick_folder = self._reg(tb.Button(lf_in, text="Pasta", command=self.pick_folder, bootstyle="secondary"))
@@ -230,7 +366,7 @@ class ScannerGUI(tb.Window):
         self.mode_var = tk.StringVar(value="content")
         self.match_var = tk.StringVar(value="contains")
 
-        tb.Label(lf_in, text="Modo:").grid(row=1, column=0, sticky=W, pady=(10, 0))
+        tb.Label(lf_in, text="Modo:", style="Card.TLabel").grid(row=1, column=0, sticky=W, pady=(10, 0))
         self.cmb_mode = self._reg(
             tb.Combobox(
                 lf_in,
@@ -242,7 +378,7 @@ class ScannerGUI(tb.Window):
         )
         self.cmb_mode.grid(row=1, column=1, sticky=W, padx=8, pady=(10, 0))
 
-        tb.Label(lf_in, text="Match:").grid(row=1, column=2, sticky=E, pady=(10, 0))
+        tb.Label(lf_in, text="Match:", style="Card.TLabel").grid(row=1, column=2, sticky=E, pady=(10, 0))
         self.cmb_match = self._reg(
             tb.Combobox(
                 lf_in,
@@ -255,7 +391,7 @@ class ScannerGUI(tb.Window):
         self.cmb_match.grid(row=1, column=3, sticky=W, pady=(10, 0))
 
         # label em 2 linhas (evita "cortar")
-        tb.Label(lf_in, text="Termos\n(ex.: {experience, 300}):", justify=LEFT).grid(
+        tb.Label(lf_in, text="Termos\n(ex.: {experience, 300}):", justify=LEFT, style="Card.TLabel").grid(
             row=2, column=0, sticky=W, pady=(12, 0)
         )
         self.query_var = tk.StringVar()
@@ -263,7 +399,7 @@ class ScannerGUI(tb.Window):
         self.ent_terms.grid(row=2, column=1, columnspan=3, sticky=EW, padx=8, pady=(12, 0))
 
         # ---------- Opcoes ----------
-        lf_opt = tb.Labelframe(self.tab_search, text="Opcoes", padding=12, bootstyle="secondary")
+        lf_opt = tb.Labelframe(self.tab_search, text="Opcoes", padding=12, style="Card.TLabelframe")
         lf_opt.pack(fill=X, pady=(12, 0))
 
         self.recursive_var = tk.BooleanVar(value=True)
@@ -278,27 +414,23 @@ class ScannerGUI(tb.Window):
         self.chk_case.pack(side=LEFT, padx=(0, 16))
         self.chk_accents.pack(side=LEFT, padx=(0, 16))
 
-        tb.Label(
-            lf_opt,
-            text="(Em regex: ignorar acentos fica desativado)",
-            bootstyle="secondary",
-        ).pack(side=LEFT)
+        tb.Label(lf_opt, text="(Em regex: ignorar acentos fica desativado)", style="CardMuted.TLabel").pack(side=LEFT)
 
         # ---------- Conteudo ----------
         self.lf_content = tb.Labelframe(
             self.tab_search,
             text="Opcoes de conteudo (apenas no modo: content)",
             padding=12,
-            bootstyle="secondary",
+            style="Card.TLabelframe",
         )
         self.lf_content.pack(fill=X, pady=(12, 0))
         self.lf_content.columnconfigure(1, weight=1)
 
         self.exts_var = tk.StringVar(value="")
-        tb.Label(self.lf_content, text="Extensoes (csv):").grid(row=0, column=0, sticky=W)
+        tb.Label(self.lf_content, text="Extensoes (csv):", style="Card.TLabel").grid(row=0, column=0, sticky=W)
         self.ent_exts = self._reg(tb.Entry(self.lf_content, textvariable=self.exts_var))
         self.ent_exts.grid(row=0, column=1, sticky=EW, padx=8)
-        tb.Label(self.lf_content, text="Ex.: .txt,.py (vazio = qualquer)", bootstyle="secondary").grid(
+        tb.Label(self.lf_content, text="Ex.: .txt,.py (vazio = qualquer)", style="CardMuted.TLabel").grid(
             row=0, column=2, sticky=W
         )
 
@@ -306,7 +438,7 @@ class ScannerGUI(tb.Window):
         self.max_examples_var = tk.IntVar(value=3)
         self.all_examples_var = tk.BooleanVar(value=True)  # "Todos" por padrao
 
-        tb.Label(self.lf_content, text="Trechos por arquivo:").grid(row=1, column=0, sticky=W, pady=(10, 0))
+        tb.Label(self.lf_content, text="Trechos por arquivo:", style="Card.TLabel").grid(row=1, column=0, sticky=W, pady=(10, 0))
         self.spin_examples = self._reg(
             tb.Spinbox(
                 self.lf_content,
@@ -329,7 +461,7 @@ class ScannerGUI(tb.Window):
         )
         self.chk_all_examples.grid(row=1, column=2, sticky=W, pady=(10, 0))
 
-        tb.Label(self.lf_content, text="(0 = nenhum)", bootstyle="secondary").grid(row=1, column=3, sticky=W, pady=(10, 0))
+        tb.Label(self.lf_content, text="(0 = nenhum)", style="CardMuted.TLabel").grid(row=1, column=3, sticky=W, pady=(10, 0))
 
         # limite de tamanho
         self.limit_size_var = tk.BooleanVar(value=True)
@@ -356,19 +488,19 @@ class ScannerGUI(tb.Window):
             )
         )
         self.spin_max_mb.grid(row=2, column=1, sticky=W, padx=8, pady=(10, 0))
-        tb.Label(self.lf_content, text="(0 = sem limite)", bootstyle="secondary").grid(row=2, column=2, sticky=W, pady=(10, 0))
+        tb.Label(self.lf_content, text="(0 = sem limite)", style="CardMuted.TLabel").grid(row=2, column=2, sticky=W, pady=(10, 0))
 
         # ---------- Footer / Scan ----------
-        footer = tb.Frame(self.tab_search)
+        footer = tb.Frame(self.tab_search, style="App.TFrame")
         footer.pack(fill=X, pady=(14, 0))
 
         # Acoes principais com uma paleta mais "clean"
-        self.btn_scan = self._reg(tb.Button(footer, text="Scan", command=self.start_scan, bootstyle="primary"))
+        self.btn_scan = self._reg(tb.Button(footer, text="Scan", command=self.start_scan, bootstyle="primary", style="PrimaryBig.TButton"))
         self.btn_stop = tb.Button(footer, text="Parar", command=self.stop_scan, bootstyle="danger-outline", state="disabled")
         self.btn_scan.pack(side=LEFT)
         self.btn_stop.pack(side=LEFT, padx=8)
 
-        tb.Label(footer, text="Progresso e ETA na barra inferior", bootstyle="secondary").pack(side=RIGHT)
+        tb.Label(footer, text="Progresso e ETA na barra inferior", style="Muted.TLabel").pack(side=RIGHT)
 
         # callbacks
         self.mode_var.trace_add("write", lambda *_: self._sync_mode_controls())
@@ -381,7 +513,7 @@ class ScannerGUI(tb.Window):
         self._sync_match_controls()
 
     def _build_results_tab(self) -> None:
-        top = tb.Frame(self.tab_results)
+        top = tb.Frame(self.tab_results, style="App.TFrame")
         top.pack(fill=X, pady=(0, 10))
 
         self.btn_export_csv = tb.Button(top, text="Exportar CSV", command=self.export_csv, bootstyle="primary-outline", state="disabled")
@@ -395,15 +527,15 @@ class ScannerGUI(tb.Window):
         self.btn_clear.pack(side=LEFT)
 
         self.res_summary = tk.StringVar(value="Sem resultados.")
-        tb.Label(top, textvariable=self.res_summary, bootstyle="secondary").pack(side=RIGHT)
+        tb.Label(top, textvariable=self.res_summary, style="Muted.TLabel").pack(side=RIGHT)
 
-        body = tb.Frame(self.tab_results)
+        body = tb.Frame(self.tab_results, style="App.TFrame")
         body.pack(fill=BOTH, expand=YES)
         body.columnconfigure(0, weight=3)
         body.columnconfigure(1, weight=2)
         body.rowconfigure(0, weight=1)
-        # area esquerda: tabela + scrollbar
-        left = tb.Frame(body)
+        # area esquerda: tabela em "card"
+        left = tb.Frame(body, style="Card.TFrame", padding=8)
         left.grid(row=0, column=0, sticky="nsew")
         left.rowconfigure(0, weight=1)
         left.columnconfigure(0, weight=1)
@@ -420,23 +552,30 @@ class ScannerGUI(tb.Window):
         self.tree.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
 
-        # detalhes
-        detail = tb.Labelframe(body, text="Detalhes", padding=10, bootstyle="primary")
+        # detalhes (card)
+        detail = tb.Labelframe(body, text="Detalhes", padding=10, style="Card.TLabelframe")
         detail.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
         detail.rowconfigure(0, weight=1)
         detail.columnconfigure(0, weight=1)
 
         # Detalhes em estilo claro (mais "premium")
+        pal = getattr(self, "_pal", {"card": "#FFFFFF", "text": "#111827", "border": "#E5E7EB"})
         self.txt_detail = tk.Text(
             detail,
             wrap="word",
             height=10,
-            background="#ffffff",
-            foreground="#111827",
-            insertbackground="#111827",
+            background=pal["card"],
+            foreground=pal["text"],
+            insertbackground=pal["text"],
             borderwidth=0,
-            highlightthickness=0,
+            highlightthickness=1,
+            highlightbackground=pal["border"],
+            highlightcolor=pal["border"],
         )
+        try:
+            self.txt_detail.configure(padx=10, pady=8)
+        except Exception:
+            pass
         self.txt_detail.grid(row=0, column=0, sticky="nsew")
         dscroll = tb.Scrollbar(detail, orient=VERTICAL, command=self.txt_detail.yview)
         self.txt_detail.configure(yscrollcommand=dscroll.set)
@@ -525,8 +664,15 @@ class ScannerGUI(tb.Window):
         self.last_elapsed = 0.0
 
         self.badge_var.set("Preparando")
+        try:
+            self.lbl_badge.configure(bootstyle="info-inverse")
+        except Exception:
+            pass
         self.status_msg_var.set("Preparando...")
         self.status_stats_var.set("")
+
+        # Animacao de atividade (spinner) + feedback visual
+        self._start_activity_animation()
 
         # Enquanto contamos/paramos etc: indeterminado
         self.progress.configure(mode="indeterminate")
@@ -549,6 +695,10 @@ class ScannerGUI(tb.Window):
     def stop_scan(self) -> None:
         self._stop_flag = True
         self.badge_var.set("Parando")
+        try:
+            self.lbl_badge.configure(bootstyle="danger-inverse")
+        except Exception:
+            pass
         self.status_msg_var.set("Parando...")
 
     def _run_scan(self) -> None:
@@ -795,8 +945,13 @@ class ScannerGUI(tb.Window):
 
     def _ui_done(self) -> None:
         self._is_scanning = False
+        self._stop_activity_animation()
         self.progress.stop()
         self.badge_var.set("Pronto" if not self._stop_flag else "Parado")
+        try:
+            self.lbl_badge.configure(bootstyle="secondary-inverse" if not self._stop_flag else "warning-inverse")
+        except Exception:
+            pass
         self.status_msg_var.set("Pronto." if not self._stop_flag else "Parado.")
         # Mantem um resumo do tempo final (se houver)
         if self.last_elapsed > 0:
