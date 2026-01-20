@@ -169,13 +169,6 @@ def download_asset(
 
 
 def launch_replace_and_restart(old_exe: Path, new_exe: Path, pid: int) -> None:
-    """Troca o EXE e reinicia.
-
-    **Importante (Windows PT/Unicode):**
-    Um .bat pode falhar ao lidar com caminhos contendo acentos (ex.: "Área de Trabalho"),
-    pois o `cmd.exe` interpreta o arquivo com a codepage atual. Para evitar isso,
-    usamos PowerShell, que lida melhor com Unicode e caminhos complexos.
-    """
     old_exe = Path(old_exe).resolve()
     new_exe = Path(new_exe).resolve()
 
@@ -184,66 +177,66 @@ def launch_replace_and_restart(old_exe: Path, new_exe: Path, pid: int) -> None:
     if not new_exe.exists():
         raise RuntimeError(f"Novo exe nao encontrado: {new_exe}")
 
-    tmp = Path(tempfile.gettempdir())
-    ps1 = tmp / f"muscanner_update_{pid}.ps1"
-    log = tmp / f"muscanner_update_{pid}.log"
+    bat = Path(tempfile.gettempdir()) / f"muscanner_update_{pid}.bat"
+    log = Path(tempfile.gettempdir()) / "MuScannerUpdate" / "update_log.txt"
+    log.parent.mkdir(parents=True, exist_ok=True)
 
-    # PowerShell: mais confiavel com Unicode + tem Wait-Process
-    ps_script = f"""
-$ErrorActionPreference = 'SilentlyContinue'
+    script = f"""@echo off
+setlocal enableextensions
+set "PID={pid}"
+set "OLD={old_exe}"
+set "NEW={new_exe}"
+set "LOG={log}"
 
-$PidToWait = {pid}
-$OldPath = @'{str(old_exe)}'@
-$NewPath = @'{str(new_exe)}'@
-$LogPath = @'{str(log)}'@
+echo ==== MuScanner Update ====>>"%LOG%"
+echo OLD=%OLD%>>"%LOG%"
+echo NEW=%NEW%>>"%LOG%"
+echo PID=%PID%>>"%LOG%"
 
-function Log([string]$m) {{
-  $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-  "$ts  $m" | Out-File -FilePath $LogPath -Append -Encoding UTF8
-}}
+:wait
+tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto wait
+)
 
-Log "Updater iniciado. PID=$PidToWait"
-Log "OLD=$OldPath"
-Log "NEW=$NewPath"
+REM tenta substituir com retry
+set "OK=0"
+for /L %%i in (1,1,6) do (
+  copy /Y "%NEW%" "%OLD%" >nul
+  if not errorlevel 1 (
+    set "OK=1"
+    goto :donecopy
+  )
+  echo copy falhou tentativa %%i (errorlevel=%errorlevel%)>>"%LOG%"
+  timeout /t 1 /nobreak >nul
+)
 
-try {{
-  Wait-Process -Id $PidToWait -Timeout 120 | Out-Null
-}} catch {{
-  # Se nao existir, segue
-}}
+:donecopy
+if "%OK%"=="1" (
+  echo copy OK, iniciando OLD>>"%LOG%"
+  start "" "%OLD%"
+) else (
+  REM fallback: instala por usuario (evita Program Files/permissao)
+  set "FALLDIR=%LOCALAPPDATA%\\MuScanner"
+  mkdir "%FALLDIR%" >nul 2>nul
+  copy /Y "%NEW%" "%FALLDIR%\\ScannerGUI.exe" >nul
+  if not errorlevel 1 (
+    echo fallback OK, iniciando %FALLDIR%\\ScannerGUI.exe>>"%LOG%"
+    start "" "%FALLDIR%\\ScannerGUI.exe"
+  ) else (
+    echo fallback falhou (errorlevel=%errorlevel%)>>"%LOG%"
+    REM mostra log para o usuario
+    notepad "%LOG%"
+  )
+)
 
-# Tenta copiar algumas vezes (antivirus/lock momentaneo)
-$ok = $false
-for ($i=0; $i -lt 60; $i++) {{
-  try {{
-    Copy-Item -LiteralPath $NewPath -Destination $OldPath -Force
-    $ok = $true
-    break
-  }} catch {{
-    Start-Sleep -Milliseconds 500
-  }}
-}}
-
-if ($ok) {{
-  Log "Copiado com sucesso."
-}} else {{
-  Log "Falha ao copiar apos varias tentativas."
-}}
-
-try {{
-  $wd = Split-Path -Parent $OldPath
-  Start-Process -FilePath $OldPath -WorkingDirectory $wd
-  Log "Reinicio acionado."
-}} catch {{
-  Log "Falha ao reiniciar."
-}}
-
-try {{ Remove-Item -LiteralPath $NewPath -Force }} catch {{}}
-try {{ Remove-Item -LiteralPath $PSCommandPath -Force }} catch {{}}
-""".strip()
-
-    # UTF-8 e ok pro PowerShell
-    ps1.write_text(ps_script, encoding="utf-8")
+REM limpa
+del "%NEW%" >nul 2>nul
+del "%~f0" >nul 2>nul
+endlocal
+"""
+    bat.write_text(script, encoding="utf-8")
 
     creationflags = 0
     try:
@@ -251,16 +244,4 @@ try {{ Remove-Item -LiteralPath $PSCommandPath -Force }} catch {{}}
     except Exception:
         creationflags = 0
 
-    # -ExecutionPolicy Bypass evita bloqueio em maquinas com policy restrita
-    subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(ps1),
-        ],
-        close_fds=True,
-        creationflags=creationflags,
-    )
+    subprocess.Popen(["cmd.exe", "/c", str(bat)], close_fds=True, creationflags=creationflags)

@@ -41,7 +41,7 @@ import updater_github as upd
 APP_TITLE = "Scanner GUI"
 # Atualize este numero quando publicar uma nova versao no GitHub Releases.
 # (Layout premium claro)
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 
 # --- Auto-update (GitHub Releases) ---
 # Recomenda-se repo PUBLICO (ou entao voce precisara de token e isso nao e seguro embutir no exe).
