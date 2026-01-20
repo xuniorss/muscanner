@@ -4,29 +4,30 @@
 Como funciona:
 - Busca o release mais recente em: https://api.github.com/repos/<owner>/<repo>/releases/latest
 - Escolhe um asset .exe (ou pelo nome preferido)
-- Baixa o exe para %TEMP%
-- Cria um .bat temporario que espera o PID finalizar e substitui o exe antigo pelo novo
+- Baixa o exe para %TEMP%\MuScannerUpdate
+- Aplica a atualizacao via PowerShell (suporta caminhos com Unicode/acentos)
 
-Observacoes importantes:
-- Isso funciona melhor com repo PUBLICO. Para repo privado voce precisaria de token (nao e seguro embutir).
-- O executavel em execucao fica bloqueado no Windows, por isso usamos um .bat externo para trocar.
+Observacoes:
+- Funciona melhor com repo PUBLICO. Para repo privado voce precisaria de token.
+- No Windows, o executavel em execucao fica bloqueado; por isso usamos um processo externo
+  (PowerShell) para esperar o PID e trocar o arquivo.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import subprocess
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-UA = "MuScanner-Updater/1.0"
+UA = "MuScanner-Updater/1.1"
 
 
 @dataclass
@@ -73,16 +74,10 @@ def get_latest_release(owner: str, repo: str) -> ReleaseInfo:
 
 
 def _parse_semver(tag: str) -> Tuple[int, int, int, str]:
-    """Extrai (major, minor, patch, extra) de algo como 'v1.2.3' ou '1.2.3-beta'.
-
-    Regra:
-      - comparamos major/minor/patch como inteiros
-      - se empatar, consideramos 'extra' (pre-release) como menor que vazio
-    """
+    """Extrai (major, minor, patch, extra) de algo como 'v1.2.3' ou '1.2.3-beta'."""
     t = (tag or "").strip()
     t = t.lstrip("vV").strip()
 
-    # pega apenas inicio numerico, mas guarda sufixo (beta/rc)
     m = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?(.*)$", t)
     if not m:
         return (0, 0, 0, t)
@@ -98,18 +93,14 @@ def is_newer(latest_tag: str, current_tag: str) -> bool:
     la = _parse_semver(latest_tag)
     cu = _parse_semver(current_tag)
 
-    # compara major/minor/patch
     if la[:3] != cu[:3]:
         return la[:3] > cu[:3]
 
-    # se empatar, release final (extra vazio) e considerado mais novo que pre-release
     l_extra, c_extra = la[3], cu[3]
     if not l_extra and c_extra:
         return True
     if l_extra and not c_extra:
         return False
-
-    # fallback: compara string do extra
     return l_extra > c_extra
 
 
@@ -123,7 +114,6 @@ def pick_asset(release: ReleaseInfo, *, preferred_name: str = "") -> Optional[As
             if a.name.lower() == preferred_name.lower():
                 return a
 
-    # fallback: primeiro .exe
     for a in assets:
         if a.name.lower().endswith(".exe") and a.url:
             return a
@@ -144,7 +134,6 @@ def download_asset(
     tmpdir = Path(tempfile.gettempdir()) / "MuScannerUpdate"
     tmpdir.mkdir(parents=True, exist_ok=True)
 
-    # nome unico para evitar conflito
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", asset.name or "update.exe")
     dest = tmpdir / f"{int(time.time())}_{safe_name}"
 
@@ -168,7 +157,128 @@ def download_asset(
     return dest
 
 
-def launch_replace_and_restart(old_exe: Path, new_exe: Path, pid: int) -> None:
+_PS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+
+$Pid = [int]$env:MUSCANNER_PID
+$Old = $env:MUSCANNER_OLD
+$New = $env:MUSCANNER_NEW
+$Log = $env:MUSCANNER_LOG
+$AppDir = $env:MUSCANNER_APPDIR
+$ExeName = $env:MUSCANNER_EXENAME
+$ArgsJson = $env:MUSCANNER_ARGS_JSON
+
+function Write-Log([string]$m) {
+  try {
+    $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Add-Content -LiteralPath $Log -Value "$ts  $m"
+  } catch { }
+}
+
+Write-Log "==== MuScanner Update ===="
+Write-Log "PID=$Pid"
+Write-Log "OLD=$Old"
+Write-Log "NEW=$New"
+
+# Espera o app fechar
+try { Wait-Process -Id $Pid -ErrorAction SilentlyContinue } catch { }
+Start-Sleep -Milliseconds 300
+
+# Args
+$argsList = @()
+if ($ArgsJson) {
+  try {
+    $tmp = $ArgsJson | ConvertFrom-Json
+    if ($tmp -is [System.Array]) { $argsList = $tmp }
+    elseif ($null -ne $tmp -and "$tmp" -ne '') { $argsList = @([string]$tmp) }
+  } catch {
+    Write-Log "Falha ao parsear args JSON: $($_.Exception.Message)"
+  }
+}
+
+$ok = $false
+for ($i=1; $i -le 10; $i++) {
+  try {
+    Copy-Item -LiteralPath $New -Destination $Old -Force
+    $ok = $true
+    Write-Log "Copy OK (tentativa $i)"
+    break
+  } catch {
+    Write-Log "Copy falhou (tentativa $i): $($_.Exception.Message)"
+    Start-Sleep -Seconds 1
+  }
+}
+
+if ($ok) {
+  try {
+    Start-Process -FilePath $Old -ArgumentList $argsList | Out-Null
+    Write-Log "Iniciado: $Old"
+  } catch {
+    Write-Log "Falha ao iniciar OLD: $($_.Exception.Message)"
+  }
+} else {
+  # fallback: instala por usuario em LocalAppData
+  try {
+    $fallbackDir = Join-Path $env:LOCALAPPDATA $AppDir
+    New-Item -ItemType Directory -Force -Path $fallbackDir | Out-Null
+    $fallbackExe = Join-Path $fallbackDir $ExeName
+
+    $ok2 = $false
+    for ($i=1; $i -le 10; $i++) {
+      try {
+        Copy-Item -LiteralPath $New -Destination $fallbackExe -Force
+        $ok2 = $true
+        Write-Log "Fallback copy OK (tentativa $i) => $fallbackExe"
+        break
+      } catch {
+        Write-Log "Fallback copy falhou (tentativa $i): $($_.Exception.Message)"
+        Start-Sleep -Seconds 1
+      }
+    }
+
+    if ($ok2) {
+      Start-Process -FilePath $fallbackExe -ArgumentList $argsList | Out-Null
+      Write-Log "Iniciado fallback: $fallbackExe"
+    } else {
+      Write-Log "Fallback falhou. Abrindo log."
+      Start-Process -FilePath notepad.exe -ArgumentList $Log | Out-Null
+    }
+  } catch {
+    Write-Log "Falha fatal no fallback: $($_.Exception.Message)"
+    try { Start-Process -FilePath notepad.exe -ArgumentList $Log | Out-Null } catch { }
+  }
+}
+
+# limpa
+try { Remove-Item -LiteralPath $New -Force -ErrorAction SilentlyContinue } catch { }
+"""
+
+
+def launch_replace_and_restart(
+    old_exe: Path,
+    new_exe: Path,
+    pid: int,
+    *,
+    app_dirname: str = "MuScanner",
+    exe_name: str = "ScannerGUI.exe",
+    extra_args: Optional[List[str]] = None,
+) -> None:
+    """Dispara um processo externo para substituir o exe e reiniciar.
+
+    - Suporta caminhos com Unicode/acentos (PowerShell)
+    - Tenta atualizar in-place; se falhar, copia para %LOCALAPPDATA%\<app_dirname>\<exe_name>
+
+    Args:
+        old_exe: executavel atual (destino)
+        new_exe: executavel baixado (origem)
+        pid: PID do processo atual para aguardar encerrar
+        app_dirname: pasta de fallback em LocalAppData
+        exe_name: nome do exe no fallback
+        extra_args: args para repassar ao reiniciar
+    """
+    if platform.system() != "Windows":
+        raise RuntimeError("Auto-update esta disponivel apenas no Windows.")
+
     old_exe = Path(old_exe).resolve()
     new_exe = Path(new_exe).resolve()
 
@@ -177,66 +287,26 @@ def launch_replace_and_restart(old_exe: Path, new_exe: Path, pid: int) -> None:
     if not new_exe.exists():
         raise RuntimeError(f"Novo exe nao encontrado: {new_exe}")
 
-    bat = Path(tempfile.gettempdir()) / f"muscanner_update_{pid}.bat"
-    log = Path(tempfile.gettempdir()) / "MuScannerUpdate" / "update_log.txt"
-    log.parent.mkdir(parents=True, exist_ok=True)
+    tmpdir = Path(tempfile.gettempdir()) / "MuScannerUpdate"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    log = tmpdir / "update_log.txt"
 
-    script = f"""@echo off
-setlocal enableextensions
-set "PID={pid}"
-set "OLD={old_exe}"
-set "NEW={new_exe}"
-set "LOG={log}"
+    ps1 = tmpdir / f"muscanner_update_{pid}.ps1"
+    # escreve com BOM para compatibilidade com PowerShell 5.1
+    ps1.write_bytes(b"\xef\xbb\xbf" + _PS_SCRIPT.encode("utf-8"))
 
-echo ==== MuScanner Update ====>>"%LOG%"
-echo OLD=%OLD%>>"%LOG%"
-echo NEW=%NEW%>>"%LOG%"
-echo PID=%PID%>>"%LOG%"
-
-:wait
-tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul
-if not errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto wait
-)
-
-REM tenta substituir com retry
-set "OK=0"
-for /L %%i in (1,1,6) do (
-  copy /Y "%NEW%" "%OLD%" >nul
-  if not errorlevel 1 (
-    set "OK=1"
-    goto :donecopy
-  )
-  echo copy falhou tentativa %%i (errorlevel=%errorlevel%)>>"%LOG%"
-  timeout /t 1 /nobreak >nul
-)
-
-:donecopy
-if "%OK%"=="1" (
-  echo copy OK, iniciando OLD>>"%LOG%"
-  start "" "%OLD%"
-) else (
-  REM fallback: instala por usuario (evita Program Files/permissao)
-  set "FALLDIR=%LOCALAPPDATA%\\MuScanner"
-  mkdir "%FALLDIR%" >nul 2>nul
-  copy /Y "%NEW%" "%FALLDIR%\\ScannerGUI.exe" >nul
-  if not errorlevel 1 (
-    echo fallback OK, iniciando %FALLDIR%\\ScannerGUI.exe>>"%LOG%"
-    start "" "%FALLDIR%\\ScannerGUI.exe"
-  ) else (
-    echo fallback falhou (errorlevel=%errorlevel%)>>"%LOG%"
-    REM mostra log para o usuario
-    notepad "%LOG%"
-  )
-)
-
-REM limpa
-del "%NEW%" >nul 2>nul
-del "%~f0" >nul 2>nul
-endlocal
-"""
-    bat.write_text(script, encoding="utf-8")
+    env = dict(os.environ)
+    env.update(
+        {
+            "MUSCANNER_PID": str(pid),
+            "MUSCANNER_OLD": str(old_exe),
+            "MUSCANNER_NEW": str(new_exe),
+            "MUSCANNER_LOG": str(log),
+            "MUSCANNER_APPDIR": app_dirname,
+            "MUSCANNER_EXENAME": exe_name,
+            "MUSCANNER_ARGS_JSON": json.dumps(extra_args or []),
+        }
+    )
 
     creationflags = 0
     try:
@@ -244,4 +314,17 @@ endlocal
     except Exception:
         creationflags = 0
 
-    subprocess.Popen(["cmd.exe", "/c", str(bat)], close_fds=True, creationflags=creationflags)
+    # Dispara PowerShell em background
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ps1),
+        ],
+        env=env,
+        close_fds=True,
+        creationflags=creationflags,
+    )

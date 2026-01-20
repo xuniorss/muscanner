@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -23,16 +24,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller ttkbootstrap
+          pip install -r requirements.txt
+          pip install pyinstaller
 
       - name: Build EXE
         run: |
           pyinstaller --noconsole --onefile --clean --uac-admin --name ScannerGUI gui_scanner_pro.py
 
-      - name: Upload asset to GitHub Release
+      - name: Create/Update GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             dist/ScannerGUI.exe
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

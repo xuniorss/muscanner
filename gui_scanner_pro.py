@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Scanner GUI (Desktop) - interface grafica para scanner3.py.
 
 Recursos:
@@ -20,6 +20,7 @@ Observacao:
 from __future__ import annotations
 
 import os
+import shutil
 import platform
 import subprocess
 import sys
@@ -41,7 +42,7 @@ import updater_github as upd
 APP_TITLE = "Scanner GUI"
 # Atualize este numero quando publicar uma nova versao no GitHub Releases.
 # (Layout premium claro)
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 
 # --- Auto-update (GitHub Releases) ---
 # Recomenda-se repo PUBLICO (ou entao voce precisara de token e isso nao e seguro embutir no exe).
@@ -51,6 +52,13 @@ GITHUB_REPO = "muscanner"
 GITHUB_ASSET_NAME = "ScannerGUI.exe"
 # Tema "premium" (claro). Outras boas opcoes: "cosmo", "litera", "minty".
 THEME = "flatly"
+
+# --- Instalacao por usuario (permite rodar de qualquer pasta e ainda atualizar) ---
+APP_DIRNAME = "MuScanner"
+EXE_NAME = "ScannerGUI.exe"
+# Se existir um arquivo com este nome ao lado do exe, o app roda 100% portable (sem copiar para LocalAppData).
+PORTABLE_MARKER = "portable.mode"
+
 
 
 def _fmt_hhmmss(seconds: Optional[float]) -> str:
@@ -86,6 +94,65 @@ def safe_set_state(widget: Any, state: str) -> None:
             widget["state"] = state
         except Exception:
             pass
+
+
+def _user_install_dir(app_dirname: str = APP_DIRNAME) -> Path:
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        # fallback: home
+        base = str(Path.home())
+    return Path(base) / app_dirname
+
+
+def bootstrap_to_user_install() -> None:
+    """Garante que o app rode de um caminho gravavel e estavel (LocalAppData).
+
+    Motivo: atualizacao in-place pode falhar quando o exe roda de pastas como Desktop/Downloads/OneDrive
+    (caminhos com acentos/Unicode) ou locais sem permissao.
+
+    Regra:
+      - Se existir PORTABLE_MARKER ao lado do exe: nao faz bootstrap (modo portable).
+      - Caso contrario, copia o exe para %LOCALAPPDATA%\MuScanner\ScannerGUI.exe e relanca de la.
+    """
+    if platform.system() != "Windows":
+        return
+    if not getattr(sys, "frozen", False):
+        return
+
+    try:
+        current_exe = Path(sys.executable).resolve()
+    except Exception:
+        return
+
+    # modo portable: nao copiar/relancar
+    try:
+        if (current_exe.parent / PORTABLE_MARKER).exists():
+            return
+    except Exception:
+        pass
+
+    target_dir = _user_install_dir(APP_DIRNAME)
+    target_exe = (target_dir / EXE_NAME).resolve()
+
+    # ja estamos no local-alvo
+    try:
+        if current_exe == target_exe or (target_exe.exists() and current_exe.samefile(target_exe)):
+            return
+    except Exception:
+        if current_exe == target_exe:
+            return
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(current_exe), str(target_exe))
+
+        # relanca preservando argumentos
+        subprocess.Popen([str(target_exe), *sys.argv[1:]], close_fds=True)
+        os._exit(0)
+    except Exception:
+        # Se algo der errado, continua rodando do local atual (nao impede o uso)
+        return
+
 
 
 class ScannerGUI(tb.Window):
@@ -1217,7 +1284,7 @@ class ScannerGUI(tb.Window):
             self.after(0, lambda: self.badge_var.set("Atualizando"))
             self.after(0, lambda: self.status_msg_var.set("Aplicando atualizacao..."))
 
-            upd.launch_replace_and_restart(old_exe, downloaded, pid)
+            upd.launch_replace_and_restart(old_exe, downloaded, pid, app_dirname=APP_DIRNAME, exe_name=EXE_NAME, extra_args=sys.argv[1:])
             # Fecha o app atual para liberar o arquivo
             self.after(0, self.destroy)
 
@@ -1228,5 +1295,7 @@ class ScannerGUI(tb.Window):
 
 
 if __name__ == "__main__":
+    bootstrap_to_user_install()
     app = ScannerGUI()
     app.mainloop()
+
