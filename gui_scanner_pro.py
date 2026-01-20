@@ -40,12 +40,12 @@ import updater_github as upd
 
 APP_TITLE = "Scanner GUI"
 # Atualize este numero quando publicar uma nova versao no GitHub Releases.
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 # --- Auto-update (GitHub Releases) ---
 # Recomenda-se repo PUBLICO (ou entao voce precisara de token e isso nao e seguro embutir no exe).
-GITHUB_OWNER = "SEU_USUARIO"
-GITHUB_REPO = "SEU_REPO"
+GITHUB_OWNER = "xuniorss"
+GITHUB_REPO = "muscanner"
 # Nome do asset (arquivo) que voce vai anexar no Release. Ex.: ScannerGUI.exe
 GITHUB_ASSET_NAME = "ScannerGUI.exe"
 # Tema "premium" (claro). Outras boas opcoes: "cosmo", "litera", "minty".
